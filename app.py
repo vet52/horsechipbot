@@ -194,7 +194,7 @@ sec_hipodrom = st.selectbox("Hipodrom Seçin", hipodromlar, index=8)
 
 st.write("") 
 
-if st.button(" BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type="primary"):
+if st.button("☁ BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type="primary"):
     tarih_str = f"{sec_gun}/{sec_ay}/{sec_yil}"
     
     durum_metni = st.empty()
