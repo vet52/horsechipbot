@@ -174,7 +174,7 @@ def cip_numarasi_getir(driver, at_ismi, sahip_ismi, deneme=1):
 # --- STREAMLIT WEB ARAYÜZÜ ---
 st.set_page_config(page_title="YKK & TJK Otonom Bot", page_icon="🏇🏿", layout="centered")
 
-st.title("🏇🏿 Otonom Yarış Programı Çip Bulucu", layout="centered" )
+st.title("🏇🏿 Otonom Yarış Programı Çip Bulucu", layout="centered")
 st.markdown("Bu sistem **TJK** yarış programını tarar ve **YKK** üzerinden çip numaralarını bularak hazır bir Excel raporu oluşturur.")
 
 st.divider()
