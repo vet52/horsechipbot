@@ -3,7 +3,6 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -38,15 +37,19 @@ def sahip_eslesiyor_mu(csv_sahip, web_sahip):
         
     return False
 
-# --- SELENIUM HEADLESS AYARLARI ---
+# --- BULUT (LINUX) UYUMLU HEADLESS AYARLARI ---
 def get_driver():
     options = Options()
     options.add_argument('--headless') 
     options.add_argument('--no-sandbox') 
     options.add_argument('--disable-dev-shm-usage') 
+    options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
     
-    service = Service(ChromeDriverManager().install())
+    # Streamlit Cloud'daki gömülü Chromium ve Driver yolları
+    options.binary_location = "/usr/bin/chromium"
+    service = Service("/usr/bin/chromedriver")
+    
     return webdriver.Chrome(service=service, options=options)
 
 def tjk_verilerini_cek(driver, tarih, hipodrom, durum_metni):
@@ -189,29 +192,26 @@ with col3:
 hipodromlar = ["Adana", "Ankara", "Antalya", "Bursa", "Diyarbakır", "Elazığ", "İstanbul", "İzmir", "Kocaeli", "Şanlıurfa", "Karma"]
 sec_hipodrom = st.selectbox("Hipodrom Seçin", hipodromlar, index=8) 
 
-st.write("") # Boşluk
+st.write("") 
 
 if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type="primary"):
     tarih_str = f"{sec_gun}/{sec_ay}/{sec_yil}"
     
-    # Canlı bildirim alanları
     durum_metni = st.empty()
     ilerleme_cubugu = st.empty()
     
     try:
         driver = get_driver()
         
-        # 1. TJK VERİLERİ
         at_listesi = tjk_verilerini_cek(driver, tarih_str, sec_hipodrom, durum_metni)
         
         if not at_listesi:
-            durum_metni.error("TJK'dan at listesi alınamadı. İşlem sonlandırıldı.")
+            durum_metni.error("TJK'dan at listesi alınamadı. O gün yarış olmayabilir.")
             driver.quit()
             st.stop()
             
         durum_metni.success(f"✅ TJK'dan {len(at_listesi)} at başarıyla çekildi. YKK Çip modülüne bağlanılıyor...")
         
-        # 2. YKK SORGULAMALARI
         driver.get("https://modul.ykk.gov.tr/AtSorgulama")
         time.sleep(2)
         
@@ -222,11 +222,9 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
             at_ismi = at["at_ismi"]
             sahip = at["sahip"]
             
-            # --- YÜZDELİK HESAP VE CANLI İLERLEME ÇUBUĞU ---
             yuzde = int((i / toplam_at) * 100)
             ilerleme_metni = f"İlerleme: %{yuzde} | {at_ismi} sorgulanıyor... ({i}/{toplam_at})"
             
-            # st.progress() içine text parametresi ile metin eklendi
             ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni)
             
             cip = cip_numarasi_getir(driver, at_ismi, sahip)
@@ -241,11 +239,9 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
 
         driver.quit()
         
-        # İşlem bitince progress barı %100 yapıp metni sabitleyelim
         ilerleme_cubugu.progress(1.0, text="✅ Tüm sorgulamalar tamamlandı! Excel dosyası hazırlanıyor...")
-        durum_metni.empty() # TJK durum metnini temizle
+        durum_metni.empty() 
 
-        # 3. EXCEL OLUŞTURMA VE İNDİRME BUTONU
         excel_satirlari = []
         mevcut_kosu = ""
         for at in sonuclar:
@@ -265,7 +261,7 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
         
         dosya_adi = f"Yaris_Programi_{tarih_str.replace('/','-')}_{sec_hipodrom}.xlsx"
         
-        st.balloons() # Ekranda kutlama animasyonu uçar
+        st.balloons()
         st.success("🎉 Raporunuz başarıyla hazırlandı! Aşağıdaki butona tıklayarak indirebilirsiniz.")
         
         st.download_button(
