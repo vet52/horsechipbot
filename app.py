@@ -1,236 +1,278 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
-from datetime import datetime
-import traceback
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+import time
+import datetime
+import io
+import difflib
 
-from database_setup import veritabani_kur
-from scraper import tjk_veri_cek
-from feature_engineering import verileri_hazirla
-from model_motoru import modeli_egit
-from kupon_motoru import optimum_kupon
+def turkce_buyuk_harf(metin):
+    if not isinstance(metin, str): return ""
+    return metin.replace("i", "İ").replace("ı", "I").upper()
 
-st.set_page_config(page_title="TJK Yapay Zeka Botu", page_icon="🐎", layout="wide")
-
-st.title("🐎 TJK Yapay Zeka & Optimizasyon Merkezi")
-st.markdown("Veri bilimi ve makine öğrenmesi destekli profesyonel altılı ganyan tahmin motoru.")
-
-tab_kontrol, tab_analiz, tab_gecmis = st.tabs(["⚙️ Kontrol Paneli", "📊 Olasılık Analizi", "📜 Kupon Geçmişi"])
-
-# --- TAB 1: KONTROL PANELİ ---
-with tab_kontrol:
-    with st.form("kontrol_formu"):
-        col1, col2 = st.columns(2)
+def sahip_eslesiyor_mu(csv_sahip, web_sahip):
+    c_clean = turkce_buyuk_harf(str(csv_sahip)).replace(".", " ").replace(",", " ").strip()
+    w_clean = turkce_buyuk_harf(str(web_sahip)).replace(".", " ").replace(",", " ").strip()
+    
+    c_clean = " ".join(c_clean.split())
+    w_clean = " ".join(w_clean.split())
+    
+    if c_clean == w_clean: return True
+    if c_clean in w_clean or w_clean in c_clean: return True
         
-        with col1:
-            tarih = st.date_input("Bülten Tarihi", datetime.today())
-            hipodrom = st.selectbox("Hipodrom", ["Adana", "Ankara", "Antalya", "Bursa", "Diyarbakır", "Elazığ", "İstanbul", "İzmir", "Kocaeli", "Şanlıurfa"])
-            model_tipi = st.selectbox("Yapay Zeka Motoru", ["XGBoost (Agresif ve Detaycı)", "Random Forest (Dengeli ve Çoğulcu)"])
+    c_kelimeler = c_clean.split()
+    w_kelimeler = w_clean.split()
+    
+    ortak_kelimeler = set(c_kelimeler).intersection(set(w_kelimeler))
+    min_kelime = min(len(c_kelimeler), len(w_kelimeler))
+    
+    if min_kelime > 0 and len(ortak_kelimeler) >= min_kelime: return True
+    if difflib.SequenceMatcher(None, c_clean, w_clean).ratio() > 0.85: return True
         
-        with col2:
-            butce = st.number_input("Maksimum Bütçe (TL)", min_value=10, max_value=50000, value=300, step=50)
-            risk = st.selectbox("Risk Profili", ["Güvenli (Favoriler)", "Dengeli", "Sürpriz Arayan (Bomba)"], index=1)
-            
-            varsayilan_fiyat = 1.00 if hipodrom in ["Elazığ", "Diyarbakır", "Şanlıurfa"] else 1.25
-            birim_fiyat = st.number_input("Birim Fiyat (TL)", min_value=0.10, max_value=10.0, value=varsayilan_fiyat, step=0.05)
+    return False
 
-        baslat = st.form_submit_button("🚀 Motoru Başlat ve Şablon Üret", use_container_width=True)
+# --- BULUT (LINUX) UYUMLU HEADLESS AYARLARI ---
+def get_driver():
+    options = Options()
+    options.add_argument('--headless') 
+    options.add_argument('--no-sandbox') 
+    options.add_argument('--disable-dev-shm-usage') 
+    options.add_argument('--disable-gpu')
+    options.add_argument('--window-size=1920,1080')
+    
+    # Streamlit Cloud'daki gömülü Chromium ve Driver yolları
+    options.binary_location = "/usr/bin/chromium"
+    service = Service("/usr/bin/chromedriver")
+    
+    return webdriver.Chrome(service=service, options=options)
 
-    if baslat:
-        durum_metni = st.empty()
-        # 🚨 YENİ: İçi metin dolu ilerleme çubuğu
-        ilerleme_cubugu = st.progress(0, text="%0 - Sistem Başlatılıyor...")
-        
-        # 🚨 YENİ: Callback (Geri Çağırım) Fonksiyonumuz
-        def anlik_ilerleme(yuzde, mesaj):
-            guvenli_yuzde = max(0, min(100, int(yuzde))) # Yüzdeyi 0-100 arasında sabitler
-            ilerleme_cubugu.progress(guvenli_yuzde, text=f"%{guvenli_yuzde} - {mesaj}")
-            durum_metni.info(mesaj)
+def tjk_verilerini_cek(driver, tarih, hipodrom, durum_metni):
+    at_listesi = []
+    driver.get("https://www.tjk.org/TR/yarissever/Info/Page/GunlukYarisProgrami")
+    
+    try:
+        durum_metni.info("⏳ [TJK] Takvime tarih giriliyor ve yarışlar aranıyor...")
+        tarih_kutu = WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.ID, "QueryParameter_Tarih")))
+        driver.execute_script(f"arguments[0].value = '{tarih}';", tarih_kutu)
+        tarih_kutu.send_keys(Keys.ENTER)
+        time.sleep(4) 
         
         try:
-            tarih_str = tarih.strftime("%Y-%m-%d")
-            
-            anlik_ilerleme(5, "Veritabanı bağlantıları kontrol ediliyor...")
-            veritabani_kur()
-            
-            # TJK Veri Çekme Motoruna "anlik_ilerleme" fonksiyonumuzu gönderiyoruz!
-            tjk_veri_cek(tarih_str, hipodrom, anlik_ilerleme)
-            
-            anlik_ilerleme(72, "Veritabanından geçmiş koşular okunuyor ve JOKEY ZEKASI hesaba katılıyor...")
-            X, y = verileri_hazirla()
-            
-            if X is None or X.empty:
-                st.error("❌ Model eğitimi için havuzda yeterli veri bulunamadı.")
-                st.stop()
-                
-            anlik_ilerleme(75, f"Yapay Zeka ({model_tipi}) 14 Boyutlu Matris Üzerinden Öğreniyor...")
-            yz_model = modeli_egit(X, y, model_tipi)
-            
-            anlik_ilerleme(85, "Bugünkü koşular analiz ediliyor...")
-            
-            conn = sqlite3.connect("tjk_arastirma_merkezi.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT yaris_id FROM Sonuclar WHERE yaris_id LIKE ?", (f"{tarih_str}_{hipodrom}%",))
-            kosular = cursor.fetchall()
-            
-            if len(kosular) < 6:
-                st.error(f"❌ HATA: {tarih_str} tarihinde '{hipodrom}' hipodromu için 6 ayaklı yarış bülteni tam olarak bulunamadı.")
-                conn.close()
-                st.stop()
-            
-            gercek_olasiliklar = []
-            for index, kosu in enumerate(kosular[:6]):
-                # Her ayak analiz edildiğinde barı biraz daha doldur
-                anlik_ilerleme(85 + int((index/6)*10), f"Yapay Zeka {index+1}. Ayağı süzgeçten geçiriyor...")
-                
-                yaris_id = kosu[0]
-                cursor.execute("SELECT DISTINCT at_adi, kilo, hp, jokey FROM Sonuclar WHERE yaris_id = ?", (yaris_id,))
-                atlar = cursor.fetchall()
-                
-                tum_kilolar = [float(a[1]) for a in atlar if a[1] is not None]
-                tum_hpler = [float(a[2]) for a in atlar if a[2] is not None]
-                ort_kilo_ayak = sum(tum_kilolar)/len(tum_kilolar) if tum_kilolar else 56.0
-                max_hp_ayak = max(tum_hpler) if tum_hpler else 40.0
-                
-                ayak_listesi = []
-                for t_at in atlar:
-                    at_adi = t_at[0]
-                    b_kilo = float(t_at[1]) if t_at[1] is not None else 56.0
-                    b_hp = float(t_at[2]) if t_at[2] is not None else 40.0
-                    b_jokey = t_at[3] if len(t_at) > 3 else "Bilinmiyor"
-                    
-                    kilo_fark = b_kilo - ort_kilo_ayak
-                    hp_fark = max_hp_ayak - b_hp
-                    
-                    cursor.execute("""
-                        SELECT genel_kazanma_orani, toplam_kosu, son_3_derece_ort, dinlenme_gunu, 
-                               ort_hiz, max_hiz, kum_kazanma, cim_kazanma, sentetik_kazanma, son_1_ay_idman_sayisi 
-                        FROM Ozet_At_Istatistik WHERE at_adi=?
-                    """, (at_adi,))
-                    at_ist = cursor.fetchone()
-                    
-                    at_kaz_oran = at_ist[0] if at_ist else 0.0
-                    at_kosu_say = at_ist[1] if at_ist else 0.0
-                    son_3_ort = at_ist[2] if at_ist else 99.0
-                    dinlenme = at_ist[3] if at_ist else 30.0
-                    ort_hiz = at_ist[4] if at_ist else 15.0
-                    max_hiz = at_ist[5] if at_ist else 15.0
-                    kum_kaz = at_ist[6] if at_ist else 0.0
-                    cim_kaz = at_ist[7] if at_ist else 0.0
-                    sentetik_kaz = at_ist[8] if at_ist else 0.0
-                    idman_sayisi = at_ist[9] if at_ist else 0.0
-                    
-                    cursor.execute("SELECT jokey_kazanma_orani FROM Ozet_Jokey_Istatistik WHERE jokey=?", (b_jokey,))
-                    j_ist = cursor.fetchone()
-                    jokey_kaz_oran = float(j_ist[0]) if j_ist else 0.05 
-                    
-                    X_bugun = pd.DataFrame(
-                        [[1200, at_kaz_oran, at_kosu_say, son_3_ort, dinlenme, kilo_fark, hp_fark, ort_hiz, max_hiz, kum_kaz, cim_kaz, sentetik_kaz, idman_sayisi, jokey_kaz_oran]], 
-                        columns=['mesafe', 'genel_kazanma_orani', 'toplam_kosu', 'son_3_derece_ort', 'dinlenme_gunu', 'kilo_farki', 'hp_farki', 'ort_hiz', 'max_hiz', 'kum_kazanma', 'cim_kazanma', 'sentetik_kazanma', 'son_1_ay_idman_sayisi', 'jokey_kazanma_orani']
-                    )
-                    
-                    ham_olasilik = yz_model.predict_proba(X_bugun)[0][1]
-                    if ham_olasilik == 0: ham_olasilik = 0.01 
-                        
-                    if dinlenme > 120: ham_olasilik *= 0.30 
-                    elif dinlenme > 60 and idman_sayisi < 3: ham_olasilik *= 0.50
-                    elif dinlenme < 7: ham_olasilik *= 0.70
-                        
-                    ayak_listesi.append({"at": at_adi, "olasilik": ham_olasilik, "ganyan": 0.0})
-                    
-                toplam_olasilik = sum(at['olasilik'] for at in ayak_listesi)
-                if toplam_olasilik == 0: toplam_olasilik = 1.0 
-                    
-                for at in ayak_listesi:
-                    at['olasilik'] = at['olasilik'] / toplam_olasilik
-                    at['ganyan'] = (1.0 / at['olasilik']) * 0.75 if at['olasilik'] > 0 else 80.0
-                    if at['ganyan'] > 80.0: at['ganyan'] = 80.0
-                
-                ayak_listesi = sorted(ayak_listesi, key=lambda x: x['olasilik'], reverse=True)
-                gercek_olasiliklar.append(ayak_listesi)
-            
-            conn.close()
-            st.session_state['son_analiz'] = gercek_olasiliklar
-            st.session_state['son_model_adi'] = model_tipi.split(" (")[0]
+            hipodrom_sekmesi = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, hipodrom)))
+            driver.execute_script("arguments[0].click();", hipodrom_sekmesi)
+            time.sleep(3) 
+        except:
+            durum_metni.error(f"❌ DİKKAT: {tarih} tarihinde '{hipodrom}' için yarış bulunamadı.")
+            return []
 
-            anlik_ilerleme(96, "Bütçe ve Risk Profiline göre şablon kombinasyonu optimize ediliyor...")
-            
-            kupon, maliyet = optimum_kupon(gercek_olasiliklar, butce, risk, birim_fiyat)
-            
-            anlik_ilerleme(100, "✅ Şablon Başarıyla Üretildi!")
-            durum_metni.success("✅ Şablon Başarıyla Üretildi!")
-            
-            st.subheader(f"🎯 2. ALTILI GANYAN ŞABLONU ({st.session_state['son_model_adi']})")
-            st.write(f"**Hesaplanan Maliyet:** {maliyet:.2f} TL (Birim Fiyat: {birim_fiyat} TL)")
-            
-            kupon_metni_satirlar = []
-            for i, ayak in enumerate(kupon):
-                satir = f"**{i+1}. Ayak:** {', '.join([at['at'] for at in ayak])}"
-                st.markdown(satir)
-                kupon_metni_satirlar.append(f"{i+1}. Ayak: {', '.join([at['at'] for at in ayak])}")
-            
+        durum_metni.info("⏳ [TJK] O günkü yarış tabloları analiz ediliyor ve atlar listeleniyor...")
+        kosu_divleri = driver.find_elements(By.XPATH, "//div[contains(@class, 'races-panes')]/div")
+        kosacak_atlar_set = set()
+        
+        for kosu_div in kosu_divleri:
             try:
-                conn2 = sqlite3.connect("tjk_arastirma_merkezi.db")
-                cur2 = conn2.cursor()
-                cur2.execute("""
-                    CREATE TABLE IF NOT EXISTS Kupon_Gecmisi (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        olusturulma_zamani TEXT, bulten_tarihi TEXT, hipodrom TEXT,
-                        maliyet REAL, risk_profili TEXT, kupon_detayi TEXT
-                    )
-                """)
-                tam_zaman = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                kupon_full_metin = "\n".join(kupon_metni_satirlar)
-                genisletilmis_risk = f"[{st.session_state['son_model_adi']}] {risk} ({birim_fiyat}₺)"
+                baslik_elementi = kosu_div.find_element(By.XPATH, ".//div[contains(@class, 'race-details')]//h3[@class='race-no']/a")
+                kosu_baslik = baslik_elementi.text.strip().replace('\n', ' ')
                 
-                cur2.execute("""
-                    INSERT INTO Kupon_Gecmisi 
-                    (olusturulma_zamani, bulten_tarihi, hipodrom, maliyet, risk_profili, kupon_detayi)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (tam_zaman, tarih_str, hipodrom, maliyet, genisletilmis_risk, kupon_full_metin))
+                satirlar = kosu_div.find_elements(By.XPATH, ".//table[contains(@class, 'tablesorter')]/tbody/tr")
                 
-                conn2.commit()
-                conn2.close()
-                st.success("💾 Kupon başarıyla veritabanına kaydedildi! 'Kupon Geçmişi' sekmesinden inceleyebilirsiniz.")
-            except Exception as e:
-                st.warning(f"⚠️ Kupon kaydedilirken bir hata oluştu: {str(e)}")
-            
-        except Exception as e:
-            hata_detayi = traceback.format_exc()
-            st.error(f"❌ SİSTEM ÇÖKTÜ: {hata_detayi}")
-
-# --- TAB 2: OLASILIK ANALİZİ ---
-with tab_analiz:
-    if 'son_analiz' in st.session_state:
-        st.subheader(f"🐎 14 Boyutlu Yapay Zeka Raporu ({st.session_state['son_model_adi']})")
-        for i, ayak in enumerate(st.session_state['son_analiz']):
-            st.markdown(f"#### {i+1}. AYAK")
-            df = pd.DataFrame(ayak)
-            df['olasilik'] = (df['olasilik'] * 100).round(2).astype(str) + " %"
-            df['ganyan'] = df['ganyan'].round(2)
-            df.columns = ["At Adı", "Y.Z. Güç Endeksi", "Beklenen Ganyan"]
-            df.index = df.index + 1
-            st.dataframe(df, use_container_width=True)
-    else:
-        st.info("Sistem analiz için emrinizi bekliyor...")
-
-# --- TAB 3: KUPON GEÇMİŞİ ---
-with tab_gecmis:
-    if st.button("🔄 Geçmişi Yenile"):
-        st.rerun()
-        
-    try:
-        conn = sqlite3.connect("tjk_arastirma_merkezi.db")
-        df_gecmis = pd.read_sql_query("SELECT olusturulma_zamani, bulten_tarihi, hipodrom, maliyet, risk_profili, kupon_detayi FROM Kupon_Gecmisi ORDER BY id DESC", conn)
-        conn.close()
-        
-        if not df_gecmis.empty:
-            for index, row in df_gecmis.iterrows():
-                with st.expander(f"📍 {row['hipodrom'].upper()} ({row['bulten_tarihi']}) - Maliyet: {row['maliyet']:.2f} TL"):
-                    st.write(f"**Üretim Saati:** {row['olusturulma_zamani']}")
-                    st.write(f"**Risk Profili:** {row['risk_profili']}")
-                    st.text(row['kupon_detayi'])
-        else:
-            st.info("Henüz kaydedilmiş bir kupon bulunmuyor.")
+                for satir in satirlar:
+                    try:
+                        sira_no = satir.find_element(By.CLASS_NAME, "gunluk-GunlukYarisProgrami-SiraId").text.strip()
+                        yas_bilgisi = satir.find_element(By.CLASS_NAME, "gunluk-GunlukYarisProgrami-Yas").text.strip()
+                        sahip_ismi = satir.find_element(By.CLASS_NAME, "gunluk-GunlukYarisProgrami-SahipAdi").text.strip()
+                        
+                        at_isim_hucresi = satir.find_element(By.CLASS_NAME, "gunluk-GunlukYarisProgrami-AtAdi")
+                        at_ismi_linki = at_isim_hucresi.find_element(By.TAG_NAME, "a")
+                        at_ismi = at_ismi_linki.text.strip().split("\n")[0] 
+                        
+                        if at_ismi and at_ismi not in kosacak_atlar_set:
+                            kosacak_atlar_set.add(at_ismi)
+                            at_listesi.append({
+                                "kosu_baslik": kosu_baslik,
+                                "n_no": sira_no,
+                                "at_ismi": at_ismi,
+                                "yas": yas_bilgisi,
+                                "sahip": sahip_ismi
+                            })
+                    except:
+                        continue 
+            except:
+                continue
+        return at_listesi
     except Exception as e:
-        st.info("Henüz geçmiş tablosu oluşturulmadı.")
+        durum_metni.error(f"❌ TJK sitesine bağlanılamadı: {e}")
+        return []
+
+def cip_numarasi_getir(driver, at_ismi, sahip_ismi, deneme=1):
+    try:
+        arama_kutusu = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "txtAdCip")))
+        driver.execute_script("arguments[0].value = '';", arama_kutusu) 
+        time.sleep(0.2)
+        arama_kutusu.send_keys(at_ismi)
+        time.sleep(0.2)
+        arama_kutusu.send_keys(Keys.ENTER)
+        time.sleep(0.5) 
+        
+        arama_butonu = driver.find_element(By.ID, "btnIslem")
+        driver.execute_script("arguments[0].click();", arama_butonu)
+        
+        time.sleep(0.5)
+        WebDriverWait(driver, 15).until(EC.invisibility_of_element_located((By.CLASS_NAME, "se-pre-con")))
+        time.sleep(2) 
+        
+        satirlar = driver.find_elements(By.XPATH, "//table[@id='DtTpSonuclar']/tbody/tr")
+        if len(satirlar) == 0: return "Sonuç Bulunamadı"
+        
+        if len(satirlar) == 1:
+            hucreler = satirlar[0].find_elements(By.TAG_NAME, "td")
+            if len(hucreler) >= 10:
+                sitedeki_cip = str(hucreler[2].text).strip()
+                return sitedeki_cip if sitedeki_cip else "Çip Sitede Boş"
+            return "Sonuç Bulunamadı" 
+        else:
+            eslesen_cipler = []
+            eslesen_boslar = False
+            for satir in satirlar:
+                hucreler = satir.find_elements(By.TAG_NAME, "td")
+                if len(hucreler) >= 10: 
+                    sitedeki_cip = str(hucreler[2].text).strip()   
+                    sitedeki_sahip = str(hucreler[9].text).strip() 
+                    if sahip_eslesiyor_mu(sahip_ismi, sitedeki_sahip):
+                        if sitedeki_cip: eslesen_cipler.append(sitedeki_cip)
+                        else: eslesen_boslar = True
+                            
+            if len(eslesen_cipler) > 0: return eslesen_cipler[0]
+            elif eslesen_boslar: return "Çip Sitede Boş"
+            
+            alternatif_cipler = []
+            for satir in satirlar:
+                hucreler = satir.find_elements(By.TAG_NAME, "td")
+                if len(hucreler) >= 10:
+                    s_at = turkce_buyuk_harf(hucreler[1].text).strip()
+                    s_cip = str(hucreler[2].text).strip()
+                    if s_at == turkce_buyuk_harf(at_ismi).strip() and s_cip:
+                        alternatif_cipler.append(s_cip)
+            
+            if len(alternatif_cipler) == 1: return alternatif_cipler[0]
+            return "Eşleşme Bulunamadı (Çoklu Sonuç)"
+            
+    except Exception as e:
+        if deneme == 1:
+            driver.get("https://modul.ykk.gov.tr/AtSorgulama")
+            time.sleep(2)
+            return cip_numarasi_getir(driver, at_ismi, sahip_ismi, deneme=2)
+        else:
+            return "Sorgu Hatası"
+
+# --- STREAMLIT WEB ARAYÜZÜ ---
+st.set_page_config(page_title="YKK & TJK Otonom Bot", page_icon="🐎", layout="centered")
+
+st.title("🐎 Otonom Yarış Programı Çip Bulucu")
+st.markdown("Bu sistem **TJK** yarış programını tarar ve **YKK** üzerinden çip numaralarını bularak hazır bir Excel raporu oluşturur.")
+
+st.divider()
+
+col1, col2, col3 = st.columns(3)
+bugun = datetime.date.today()
+
+with col1:
+    sec_gun = st.selectbox("Gün", [str(i).zfill(2) for i in range(1, 32)], index=bugun.day-1)
+with col2:
+    sec_ay = st.selectbox("Ay", [str(i).zfill(2) for i in range(1, 13)], index=bugun.month-1)
+with col3:
+    sec_yil = st.selectbox("Yıl", [str(i) for i in range(2024, 2030)], index=[str(i) for i in range(2024, 2030)].index(str(bugun.year)))
+
+hipodromlar = ["Adana", "Ankara", "Antalya", "Bursa", "Diyarbakır", "Elazığ", "İstanbul", "İzmir", "Kocaeli", "Şanlıurfa", "Karma"]
+sec_hipodrom = st.selectbox("Hipodrom Seçin", hipodromlar, index=8) 
+
+st.write("") 
+
+if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type="primary"):
+    tarih_str = f"{sec_gun}/{sec_ay}/{sec_yil}"
+    
+    durum_metni = st.empty()
+    ilerleme_cubugu = st.empty()
+    
+    try:
+        driver = get_driver()
+        
+        at_listesi = tjk_verilerini_cek(driver, tarih_str, sec_hipodrom, durum_metni)
+        
+        if not at_listesi:
+            durum_metni.error("TJK'dan at listesi alınamadı. O gün yarış olmayabilir.")
+            driver.quit()
+            st.stop()
+            
+        durum_metni.success(f"✅ TJK'dan {len(at_listesi)} at başarıyla çekildi. YKK Çip modülüne bağlanılıyor...")
+        
+        driver.get("https://modul.ykk.gov.tr/AtSorgulama")
+        time.sleep(2)
+        
+        sonuclar = []
+        toplam_at = len(at_listesi)
+        
+        for i, at in enumerate(at_listesi, 1):
+            at_ismi = at["at_ismi"]
+            sahip = at["sahip"]
+            
+            yuzde = int((i / toplam_at) * 100)
+            ilerleme_metni = f"İlerleme: %{yuzde} | {at_ismi} sorgulanıyor... ({i}/{toplam_at})"
+            
+            ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni)
+            
+            cip = cip_numarasi_getir(driver, at_ismi, sahip)
+            
+            sonuclar.append({
+                "kosu_baslik": at["kosu_baslik"],
+                "n_no": at["n_no"],
+                "at_ismi": at_ismi,
+                "yas": at["yas"],
+                "cip": cip
+            })
+
+        driver.quit()
+        
+        ilerleme_cubugu.progress(1.0, text="✅ Tüm sorgulamalar tamamlandı! Excel dosyası hazırlanıyor...")
+        durum_metni.empty() 
+
+        excel_satirlari = []
+        mevcut_kosu = ""
+        for at in sonuclar:
+            if at["kosu_baslik"] != mevcut_kosu:
+                if mevcut_kosu != "":
+                    excel_satirlari.append(["", "", "", ""]) 
+                mevcut_kosu = at["kosu_baslik"]
+                excel_satirlari.append([mevcut_kosu, "", "", ""]) 
+                excel_satirlari.append(["N", "At İsmi", "Yaş", "Çip Bilgisi"]) 
+            excel_satirlari.append([at["n_no"], at["at_ismi"], at["yas"], at["cip"]])
+
+        df = pd.DataFrame(excel_satirlari)
+        
+        output = io.BytesIO()
+        df.to_excel(output, index=False, header=False, engine='openpyxl')
+        output.seek(0)
+        
+        dosya_adi = f"Yaris_Programi_{tarih_str.replace('/','-')}_{sec_hipodrom}.xlsx"
+        
+        st.balloons()
+        st.success("🎉 Raporunuz başarıyla hazırlandı! Aşağıdaki butona tıklayarak indirebilirsiniz.")
+        
+        st.download_button(
+            label="📥 EXCEL DOSYASINI İNDİR",
+            data=output,
+            file_name=dosya_adi,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+
+    except Exception as e:
+        durum_metni.error(f"Sistemsel bir hata oluştu: {e}")
+        try: driver.quit()
+        except: pass
