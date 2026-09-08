@@ -1,2 +1,2 @@
-chromium
-chromium-driver
+⁠/usr/bin/chromium
+⁠/usr/bin/chromium-driver
