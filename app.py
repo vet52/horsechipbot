@@ -46,7 +46,6 @@ def get_driver():
     options.add_argument('--disable-gpu')
     options.add_argument('--window-size=1920,1080')
     
-    # Streamlit Cloud'daki gömülü Chromium ve Driver yolları
     options.binary_location = "/usr/bin/chromium"
     service = Service("/usr/bin/chromedriver")
     
@@ -221,13 +220,18 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
         for i, at in enumerate(at_listesi, 1):
             at_ismi = at["at_ismi"]
             sahip = at["sahip"]
-            
             yuzde = int((i / toplam_at) * 100)
-            ilerleme_metni = f"İlerleme: %{yuzde} | {at_ismi} sorgulanıyor... ({i}/{toplam_at})"
             
-            ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni)
+            # Adım 1: Aranıyor Bildirimi
+            ilerleme_metni_ilk = f"İlerleme: %{yuzde} | 🔍 {at_ismi} sorgulanıyor... ({i}/{toplam_at})"
+            ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni_ilk)
             
+            # Çip Sorgulama
             cip = cip_numarasi_getir(driver, at_ismi, sahip)
+            
+            # Adım 2: Çip Bulundu Bildirimi (Bulunan çip numarası ekrana yazdırılır)
+            ilerleme_metni_son = f"İlerleme: %{yuzde} | ✅ {at_ismi} -> Çip: {cip} ({i}/{toplam_at})"
+            ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni_son)
             
             sonuclar.append({
                 "kosu_baslik": at["kosu_baslik"],
@@ -261,8 +265,8 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
         
         dosya_adi = f"Yaris_Programi_{tarih_str.replace('/','-')}_{sec_hipodrom}.xlsx"
         
-        st.balloons()
-        st.success("🎉 Raporunuz başarıyla hazırlandı! Aşağıdaki butona tıklayarak indirebilirsiniz.")
+        # st.balloons() kaldırıldı, onun yerine sadece success (başarılı) mesajı eklendi.
+        st.success("Raporunuz başarıyla hazırlandı! Aşağıdaki butona tıklayarak indirebilirsiniz.")
         
         st.download_button(
             label="📥 EXCEL DOSYASINI İNDİR",
