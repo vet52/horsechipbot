@@ -199,6 +199,11 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
     durum_metni = st.empty()
     ilerleme_cubugu = st.empty()
     
+    # Yeni eklenen Canlı Log Terminali
+    st.write("### 📝 Canlı İşlem Günlüğü")
+    log_kutusu = st.empty()
+    log_metni = ""
+    
     try:
         driver = get_driver()
         
@@ -222,16 +227,16 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
             sahip = at["sahip"]
             yuzde = int((i / toplam_at) * 100)
             
-            # Adım 1: Aranıyor Bildirimi
+            # Sadece "Aranıyor" bilgisini ilerleme çubuğunda gösteriyoruz
             ilerleme_metni_ilk = f"İlerleme: %{yuzde} | 🔍 {at_ismi} sorgulanıyor... ({i}/{toplam_at})"
             ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni_ilk)
             
             # Çip Sorgulama
             cip = cip_numarasi_getir(driver, at_ismi, sahip)
             
-            # Adım 2: Çip Bulundu Bildirimi (Bulunan çip numarası ekrana yazdırılır)
-            ilerleme_metni_son = f"İlerleme: %{yuzde} | ✅ {at_ismi} -> Çip: {cip} ({i}/{toplam_at})"
-            ilerleme_cubugu.progress(i / toplam_at, text=ilerleme_metni_son)
+            # Bulunan çipi anında kalıcı olarak log kutusuna yazdırıyoruz
+            log_metni += f"[{i}/{toplam_at}] ✅ {at_ismi} -> Çip: {cip}\n"
+            log_kutusu.code(log_metni, language="text")
             
             sonuclar.append({
                 "kosu_baslik": at["kosu_baslik"],
@@ -265,7 +270,6 @@ if st.button("🚀 BULUTTA SORGULAMAYI BAŞLAT", use_container_width=True, type=
         
         dosya_adi = f"Yaris_Programi_{tarih_str.replace('/','-')}_{sec_hipodrom}.xlsx"
         
-        # st.balloons() kaldırıldı, onun yerine sadece success (başarılı) mesajı eklendi.
         st.success("Raporunuz başarıyla hazırlandı! Aşağıdaki butona tıklayarak indirebilirsiniz.")
         
         st.download_button(
